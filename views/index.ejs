@@ -1,10 +1,14 @@
 <section class="card">
   <h2>Ingest a Job Posting</h2>
-  <p class="muted">Drop in any public job URL and we will extract the structured data for you to review before publishing.</p>
+  <p class="muted">Drop in any public job URL and we will extract the structured data for you to review before publishing. Provide your API key so the request mirrors authenticated API traffic.</p>
   <form method="post" action="/ingest">
     <label>
       <span>Job URL</span>
       <input type="url" name="url" placeholder="https://example.com/job" required />
+    </label>
+    <label>
+      <span>API Key</span>
+      <input type="password" name="apiKey" placeholder="Enter your API key" required />
     </label>
     <button type="submit">Extract &amp; Review</button>
   </form>
