@@ -1,0 +1,24 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Job Poster</title>
+</head>
+<body>
+  <h1>Job Poster Service</h1>
+  <form action="/extract" method="post">
+    <label>Job URL:
+      <input type="text" name="url" required />
+    </label>
+    <br/>
+    <label>Platforms:
+      <% for(const key in modules) { %>
+        <label><input type="checkbox" name="modules" value="<%= key %>" checked/> <%= key %></label>
+      <% } %>
+    </label>
+    <br/>
+    <button type="submit">Extract</button>
+  </form>
+</body>
+</html>
