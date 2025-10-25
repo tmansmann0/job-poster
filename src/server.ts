@@ -15,6 +15,7 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const API_KEY = process.env.API_KEY;
+const DEFAULT_COMPANY_NAME = process.env.DEFAULT_COMPANY_NAME || 'Care Staff Pro';
 
 if (!ADMIN_USERNAME || !ADMIN_PASSWORD || !API_KEY) {
   throw new Error(
@@ -47,8 +48,14 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const key = req.get('x-api-key') || (req.query.api_key as string | undefined);
+  const key =
+    req.get('x-api-key') ||
+    (req.query.api_key as string | undefined) ||
+    (req.body?.apiKey as string | undefined);
   if (!key || key !== API_KEY) {
+    if (req.accepts('html')) {
+      return res.status(401).send('Invalid or missing API key');
+    }
     return res.status(401).json({ error: 'Invalid or missing API key' });
   }
   next();
@@ -90,8 +97,42 @@ const deepMerge = (base: any, add: any) => {
   return out;
 };
 
+function applyJobDefaults(job: JobPosting, urlHint?: string): JobPosting {
+  const sourceUrl = urlHint || job.sourceUrl;
+  if (sourceUrl) {
+    job.sourceUrl = sourceUrl;
+    if (!job.applyUrl) {
+      job.applyUrl = sourceUrl;
+    }
+  }
+  if (!job.datePosted) {
+    job.datePosted = new Date().toISOString();
+  }
+  const org = job.hiringOrganization || { name: '' };
+  const orgName = (org.name || '').trim();
+  job.hiringOrganization = {
+    ...org,
+    name: orgName || DEFAULT_COMPANY_NAME,
+  };
+  return job;
+}
+
+function collectMissing(job: JobPosting, selectedIds: string[], ctx: PublishContext) {
+  const missing: Record<string, { fields: string[]; credentials: string[] }> = {};
+  for (const id of selectedIds) {
+    const pub = getPublisherById(id);
+    if (!pub) continue;
+    const missFields = pub.meta.requiredFields.filter((p) => !hasField(job, p));
+    const missCreds = (pub.meta.requiredCredentials || []).filter((p) => !hasField(ctx.creds, p));
+    if (missFields.length || missCreds.length) {
+      missing[id] = { fields: missFields, credentials: missCreds };
+    }
+  }
+  return missing;
+}
+
 function jobFromForm(body: any): JobPosting {
-  return {
+  const job = {
     sourceUrl: body.sourceUrl || undefined,
     title: body.title || '',
     descriptionHTML: sanitizeDescription(body.descriptionHTML || ''),
@@ -126,6 +167,7 @@ function jobFromForm(body: any): JobPosting {
           }
         : undefined,
   } as JobPosting;
+  return applyJobDefaults(job, body.sourceUrl || undefined);
 }
 
 function buildContext(creds?: Credentials): PublishContext {
@@ -179,7 +221,7 @@ app.get('/', async (_req, res) => {
   });
 });
 
-app.post('/ingest', async (req, res) => {
+app.post('/ingest', requireApiKey, async (req, res) => {
   const url = (req.body?.url || '').trim();
   if (!url) {
     return res.status(400).send('Missing URL');
@@ -187,8 +229,8 @@ app.post('/ingest', async (req, res) => {
   try {
     const result = await extractFromUrl(url);
     const job = result.job || {};
-    const warnings = result.warnings || [];
-    const prepared: JobPosting = {
+    const warnings = [...(result.warnings || [])];
+    let prepared: JobPosting = {
       title: job.title || '',
       descriptionHTML: job.descriptionHTML || '',
       hiringOrganization: job.hiringOrganization || { name: '' },
@@ -203,6 +245,27 @@ app.post('/ingest', async (req, res) => {
       salary: job.salary,
       sourceUrl: job.sourceUrl || url,
     } as JobPosting;
+    prepared = applyJobDefaults(prepared, url);
+
+    const selectedModules = PUBLISHERS.map((p) => p.id);
+    const ctx = buildContext();
+    const missing = collectMissing(prepared, selectedModules, ctx);
+
+    if (result.failureReason) {
+      const hold = saveHold({
+        sourceUrl: prepared.sourceUrl || url,
+        job: prepared,
+        selectedModules,
+        missing,
+        confidences: result.confidences || {},
+        warnings: [...warnings],
+        failureReason: result.failureReason,
+        failureDetails: result.failureDetails,
+      });
+      warnings.push(
+        `Automatic extraction failed and the job was added to the manual review queue (ID: ${hold.id}).`,
+      );
+    }
 
     await render(res, 'review.ejs', {
       job: prepared,
@@ -227,6 +290,12 @@ app.post('/publish', async (req, res) => {
 
   const job = jobFromForm(req.body);
   const ctx = buildContext();
+
+  console.info('[publish] manual publish request received', {
+    targets,
+    jobTitle: job.title,
+    org: job.hiringOrganization?.name,
+  });
 
   const results: Array<PublishResult & { targetId: string; targetLabel: string }> = [];
   for (const id of targets) {
@@ -261,6 +330,14 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     holdIfIncomplete?: boolean;
   } = req.body || {};
 
+  console.info('[api/jobs] request received', {
+    url,
+    modules,
+    holdIfIncomplete,
+    providedFields: Object.keys(fields || {}),
+    providedCredentials: credentials ? Object.keys(credentials) : [],
+  });
+
   try {
     let extracted: Partial<JobPosting> = {};
     let confidences: Record<string, number> = {};
@@ -268,17 +345,22 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     let extractionFailureReason: string | undefined;
     let extractionFailureDetails: any;
     if (url) {
+      console.info('[api/jobs] starting extraction', { url });
       const r = await extractFromUrl(url);
       extracted = r.job || {};
       confidences = r.confidences || {};
       extractionWarnings = r.warnings || [];
       extractionFailureReason = r.failureReason;
       extractionFailureDetails = r.failureDetails;
+      console.info('[api/jobs] extraction completed', {
+        warnings: extractionWarnings,
+        failureReason: extractionFailureReason,
+      });
     }
 
     const mergedPartial = deepMerge(extracted, fields || {});
     const partial: any = { hiringOrganization: { name: '' }, ...mergedPartial };
-    const job: JobPosting = {
+    let job: JobPosting = {
       title: partial.title || '',
       descriptionHTML: partial.descriptionHTML || '',
       hiringOrganization: {
@@ -297,6 +379,7 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
       salary: partial.salary,
       sourceUrl: url || partial.sourceUrl,
     };
+    job = applyJobDefaults(job, url || partial.sourceUrl);
 
     const selectedIds =
       modules === 'all' || !modules
@@ -307,21 +390,17 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
 
     const ctx = buildContext(credentials);
 
-    const missing: Record<string, { fields: string[]; credentials: string[] }> = {};
-    for (const id of selectedIds) {
-      const pub = getPublisherById(id);
-      if (!pub) continue;
-      const missFields = pub.meta.requiredFields.filter((p) => !hasField(job, p));
-      const missCreds = (pub.meta.requiredCredentials || []).filter((p) => !hasField(ctx.creds, p));
-      if (missFields.length || missCreds.length) {
-        missing[id] = { fields: missFields, credentials: missCreds };
-      }
-    }
+    const missing = collectMissing(job, selectedIds, ctx);
 
     const hasMissing = Object.keys(missing).length > 0;
     const shouldHoldForFailure = Boolean(extractionFailureReason);
     const shouldHoldForMissing = hasMissing && holdIfIncomplete;
     if (shouldHoldForFailure || shouldHoldForMissing) {
+      console.warn('[api/jobs] job held for review', {
+        missing,
+        extractionFailureReason,
+        selectedIds,
+      });
       const rec = saveHold({
         sourceUrl: url || job.sourceUrl,
         job,
@@ -347,10 +426,26 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     for (const id of selectedIds) {
       const pub = getPublisherById(id);
       if (!pub) continue;
-      results[id] = await pub.publish(job, ctx);
+      console.info('[api/jobs] publishing via module', { moduleId: id, moduleLabel: pub.label });
+      const outcome = await pub.publish(job, ctx);
+      results[id] = outcome;
+      if (!outcome.ok) {
+        console.warn('[api/jobs] module publish failed', { moduleId: id, error: outcome.error });
+      } else {
+        console.info('[api/jobs] module publish succeeded', {
+          moduleId: id,
+          externalId: outcome.id,
+          externalUrl: outcome.url,
+        });
+      }
     }
+    console.info('[api/jobs] publishing complete', {
+      selectedIds,
+      warnings: extractionWarnings,
+    });
     return res.json({ status: 'published', results, warnings: extractionWarnings });
   } catch (err: any) {
+    console.error('[api/jobs] unexpected error', { message: err?.message });
     return res.status(500).json({ status: 'error', error: err?.message || String(err) });
   }
 });
@@ -395,6 +490,7 @@ app.post('/admin/jobs/:id/publish', requireAdmin, async (req, res) => {
   }
   const job = jobFromForm(req.body);
   const ctx = buildContext();
+  console.info('[admin] publishing held job', { jobId: rec.id, modules: rec.selectedModules });
   const results: Record<string, PublishResult> = {};
   for (const id of rec.selectedModules) {
     const pub = getPublisherById(id);

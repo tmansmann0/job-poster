@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { gotScraping } from 'got-scraping';
 import { decode } from 'html-entities';
 import { ExtractResult, JobPosting } from '../types.js';
 
@@ -120,19 +121,46 @@ function buildFailureResult(
   };
 }
 
+async function downloadHtml(url: string): Promise<string> {
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) JobPosterBot/1.0',
+    Accept: 'text/html,application/xhtml+xml',
+  };
+  try {
+    const response = await gotScraping({
+      url,
+      headers,
+      timeout: {
+        request: 15000,
+      },
+      retry: {
+        limit: 2,
+      },
+      decompress: true,
+    });
+    return response.body;
+  } catch (primaryError: any) {
+    try {
+      const response = await axios.get(url, {
+        headers,
+        timeout: 15000,
+      });
+      return response.data as string;
+    } catch (fallbackError: any) {
+      const error = fallbackError?.message || primaryError?.message || fallbackError || primaryError;
+      throw new Error(typeof error === 'string' ? error : 'failed to download page');
+    }
+  }
+}
+
 export async function extractFromUrl(url: string): Promise<ExtractResult> {
   if (!OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY missing');
   }
   let html: string | undefined;
   try {
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'JobPosterBot/1.0 (+https://example.com/job-poster)',
-        Accept: 'text/html,application/xhtml+xml',
-      },
-    });
-    html = response.data as string;
+    html = await downloadHtml(url);
   } catch (err: any) {
     return buildFailureResult(url, 'failed to download page', { error: err?.message || err });
   }
@@ -183,6 +211,9 @@ export async function extractFromUrl(url: string): Promise<ExtractResult> {
   }
 
   const job = (parsed.job || {}) as Partial<JobPosting>;
+  if (!job.sourceUrl) {
+    job.sourceUrl = url;
+  }
   const confidences = parsed.confidences || {};
   return {
     job,
