@@ -1,24 +1,15 @@
-
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Job Poster</title>
-</head>
-<body>
-  <h1>Job Poster Service</h1>
-  <form action="/extract" method="post">
-    <label>Job URL:
-      <input type="text" name="url" required />
+<section class="card">
+  <h2>Ingest Job Posting</h2>
+  <form method="post" action="/ingest">
+    <label>Job URL
+      <input type="url" name="url" placeholder="https://example.com/job" required />
     </label>
-    <br/>
-    <label>Platforms:
-      <% for(const key in modules) { %>
-        <label><input type="checkbox" name="modules" value="<%= key %>" checked/> <%= key %></label>
-      <% } %>
-    </label>
-    <br/>
-    <button type="submit">Extract</button>
+    <button type="submit">Extract & Review</button>
   </form>
-</body>
-</html>
+</section>
+
+<section class="card">
+  <h2>API Overview</h2>
+  <p>Use <code>POST /api/jobs</code> with optional <code>url</code>, <code>fields</code>, <code>credentials</code>, and <code>modules</code> to publish jobs programmatically.</p>
+  <p><a href="/api/modules">View available modules</a></p>
+</section>

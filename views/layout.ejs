@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title><%= title %></title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    .card { border: 1px solid #ccc; border-radius: 6px; padding: 1.5rem; margin-bottom: 2rem; }
+    label { display: block; margin-bottom: 0.5rem; }
+    input[type="text"], input[type="url"], textarea { width: 100%; }
+    textarea { min-height: 160px; }
+    .row { display: flex; gap: 1rem; }
+    .row > div { flex: 1; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Job Poster</h1>
+    <nav>
+      <a href="/">Home</a> ·
+      <a href="/admin/holds">Held Jobs</a>
+    </nav>
+  </header>
+  <main>
+    <%- body %>
+  </main>
+</body>
+</html>
