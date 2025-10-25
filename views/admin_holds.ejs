@@ -1,17 +1,73 @@
 <section class="card">
-  <h2>Held Jobs – Need Human Review</h2>
+  <h2>Review Queue</h2>
+  <p class="muted">Track every job that required human review before publishing. Use the review action to edit, complete missing details, and publish.</p>
   <% if (!holds.length) { %>
-    <p>No held jobs 🎉</p>
+    <p class="muted" style="margin-top:1rem;">No jobs waiting in the queue 🎉</p>
   <% } else { %>
-    <ul>
-      <% holds.forEach(h => { %>
-        <li>
-          <strong><%= h.job.title || '(Untitled)' %></strong>
-          — <%= h.job.hiringOrganization?.name || 'Unknown org' %>
-          — <em><%= h.createdAt %></em>
-          — <a href="/admin/jobs/<%= h.id %>">Review & Publish</a>
-        </li>
-      <% }) %>
-    </ul>
+    <table>
+      <thead>
+        <tr>
+          <th>Submitted</th>
+          <th>Job</th>
+          <th>Platforms</th>
+          <th>Status</th>
+          <th>Missing Information</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% holds.forEach(h => { %>
+          <% const statusClass = `status-${h.status.toLowerCase()}`; %>
+          <tr>
+            <td><%= new Date(h.createdAt).toLocaleString() %></td>
+            <td>
+              <strong><%= h.job.title || '(Untitled)' %></strong><br />
+              <span class="muted"><%= h.job.hiringOrganization?.name || 'Unknown organization' %></span>
+              <% if (h.sourceUrl) { %>
+                <div><a href="<%= h.sourceUrl %>" target="_blank" rel="noopener">Source</a></div>
+              <% } %>
+            </td>
+            <td>
+              <div class="inline-list">
+                <% h.moduleNames.forEach(name => { %>
+                  <span><%= name %></span>
+                <% }) %>
+              </div>
+            </td>
+            <td>
+              <span class="status-pill <%= statusClass %>"><%= h.status %></span>
+            </td>
+            <td>
+              <% if (!h.missingList.length) { %>
+                <span class="muted">—</span>
+              <% } else { %>
+                <ul class="missing-list">
+                  <% h.missingList.forEach(item => { %>
+                    <li>
+                      <strong><%= item.moduleLabel %></strong>
+                      <% if (item.fields.length) { %>
+                        <div>Missing fields: <%= item.fields.join(', ') %></div>
+                      <% } %>
+                      <% if (item.credentials.length) { %>
+                        <div>Missing credentials: <%= item.credentials.join(', ') %></div>
+                      <% } %>
+                    </li>
+                  <% }) %>
+                </ul>
+              <% } %>
+            </td>
+            <td>
+              <% if (h.status === 'HELD') { %>
+                <a href="/admin/jobs/<%= h.id %>">Review &amp; publish →</a>
+              <% } else if (h.status === 'PUBLISHED') { %>
+                <span class="muted">Published <%= new Date(h.updatedAt).toLocaleString() %></span>
+              <% } else { %>
+                <span class="muted">—</span>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
   <% } %>
 </section>

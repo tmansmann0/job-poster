@@ -12,9 +12,51 @@ import { saveHold, listHolds, getJob, markPublished } from './store.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const API_KEY = process.env.API_KEY;
+
+if (!ADMIN_USERNAME || !ADMIN_PASSWORD || !API_KEY) {
+  throw new Error(
+    'Missing required environment variables. Set ADMIN_USERNAME, ADMIN_PASSWORD, and API_KEY before starting the server.',
+  );
+}
+
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.json());
 app.use('/jobs', express.static(path.join(process.cwd(), 'jobs')));
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="Admin Area"');
+    return res.status(401).send('Admin authentication required');
+  }
+
+  const decoded = Buffer.from(header.replace('Basic ', ''), 'base64').toString();
+  const separatorIndex = decoded.indexOf(':');
+  const username = separatorIndex >= 0 ? decoded.substring(0, separatorIndex) : decoded;
+  const password = separatorIndex >= 0 ? decoded.substring(separatorIndex + 1) : '';
+
+  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    res.set('WWW-Authenticate', 'Basic realm="Admin Area"');
+    return res.status(401).send('Invalid admin credentials');
+  }
+
+  next();
+}
+
+function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const key = req.get('x-api-key') || (req.query.api_key as string | undefined);
+  if (!key || key !== API_KEY) {
+    return res.status(401).json({ error: 'Invalid or missing API key' });
+  }
+  next();
+}
+
+const publisherDictionary: Record<string, string> = Object.fromEntries(
+  PUBLISHERS.map((p) => [p.id, p.label]),
+);
 
 function render(res: express.Response, view: string, params: any = {}) {
   return ejs
@@ -102,7 +144,37 @@ function buildContext(creds?: Credentials): PublishContext {
 }
 
 app.get('/', async (_req, res) => {
-  await render(res, 'index.ejs');
+  const modules = listPublisherMeta();
+  const holds = listHolds();
+
+  const queueStats = {
+    total: holds.length,
+    held: holds.filter((h) => h.status === 'HELD').length,
+    published: holds.filter((h) => h.status === 'PUBLISHED').length,
+    failed: holds.filter((h) => h.status === 'FAILED').length,
+  };
+
+  const queue = holds.slice(0, 5).map((rec) => ({
+    id: rec.id,
+    title: rec.job.title || '(Untitled)',
+    organization: rec.job.hiringOrganization?.name || 'Unknown organization',
+    status: rec.status,
+    createdAt: rec.createdAt,
+    updatedAt: rec.updatedAt,
+    moduleNames: rec.selectedModules.map((id) => publisherDictionary[id] || id),
+    missing: Object.entries(rec.missing || {}).map(([moduleId, info]) => ({
+      moduleLabel: publisherDictionary[moduleId] || moduleId,
+      fields: info.fields,
+      credentials: info.credentials,
+    })),
+  }));
+
+  await render(res, 'index.ejs', {
+    modules,
+    queue,
+    queueStats,
+    title: 'Job Poster',
+  });
 });
 
 app.post('/ingest', async (req, res) => {
@@ -167,11 +239,11 @@ app.post('/publish', async (req, res) => {
   await render(res, 'result.ejs', { results, title: 'Publish Results' });
 });
 
-app.get('/api/modules', (_req, res) => {
+app.get('/api/modules', requireApiKey, (_req, res) => {
   res.json({ modules: listPublisherMeta() });
 });
 
-app.post('/api/jobs', async (req, res) => {
+app.post('/api/jobs', requireApiKey, async (req, res) => {
   const {
     url,
     fields,
@@ -266,12 +338,21 @@ app.post('/api/jobs', async (req, res) => {
   }
 });
 
-app.get('/admin/holds', async (_req, res) => {
-  const holds = listHolds();
+app.get('/admin/holds', requireAdmin, async (_req, res) => {
+  const holds = listHolds().map((rec) => ({
+    ...rec,
+    moduleNames: rec.selectedModules.map((id) => publisherDictionary[id] || id),
+    missingList: Object.entries(rec.missing || {}).map(([moduleId, info]) => ({
+      moduleId,
+      moduleLabel: publisherDictionary[moduleId] || moduleId,
+      fields: info.fields,
+      credentials: info.credentials,
+    })),
+  }));
   await render(res, 'admin_holds.ejs', { holds, title: 'Held Jobs' });
 });
 
-app.get('/admin/jobs/:id', async (req, res) => {
+app.get('/admin/jobs/:id', requireAdmin, async (req, res) => {
   const rec = getJob(req.params.id);
   if (!rec) {
     return res.status(404).send('Not found');
@@ -286,7 +367,7 @@ app.get('/admin/jobs/:id', async (req, res) => {
   });
 });
 
-app.post('/admin/jobs/:id/publish', async (req, res) => {
+app.post('/admin/jobs/:id/publish', requireAdmin, async (req, res) => {
   const rec = getJob(req.params.id);
   if (!rec) {
     return res.status(404).send('Not found');

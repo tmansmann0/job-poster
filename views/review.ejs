@@ -13,39 +13,50 @@
   <form method="post" action="<%= formAction %>">
     <div class="row">
       <div>
-        <label>Source URL
+        <label>
+          <span>Source URL</span>
           <input type="url" name="sourceUrl" value="<%= job.sourceUrl || '' %>" />
         </label>
-        <label>Title
+        <label>
+          <span>Title</span>
           <input type="text" name="title" value="<%= job.title || '' %>" required />
         </label>
-        <label>Description (HTML)
+        <label>
+          <span>Description (HTML)</span>
           <textarea name="descriptionHTML"><%= job.descriptionHTML || '' %></textarea>
         </label>
-        <label>Apply URL
+        <label>
+          <span>Apply URL</span>
           <input type="url" name="applyUrl" value="<%= job.applyUrl || '' %>" />
         </label>
-        <label>Reference ID
+        <label>
+          <span>Reference ID</span>
           <input type="text" name="refId" value="<%= job.refId || '' %>" />
         </label>
       </div>
       <div>
-        <label>Organization Name
+        <label>
+          <span>Organization Name</span>
           <input type="text" name="orgName" value="<%= job.hiringOrganization?.name || '' %>" required />
         </label>
-        <label>Organization Website
+        <label>
+          <span>Organization Website</span>
           <input type="url" name="orgWebsite" value="<%= job.hiringOrganization?.website || '' %>" />
         </label>
-        <label>Organization Logo URL
+        <label>
+          <span>Organization Logo URL</span>
           <input type="url" name="orgLogo" value="<%= job.hiringOrganization?.logoUrl || '' %>" />
         </label>
-        <label>Employment Type
+        <label>
+          <span>Employment Type</span>
           <input type="text" name="employmentType" value="<%= job.employmentType || '' %>" />
         </label>
-        <label>Remote Type
+        <label>
+          <span>Remote Type</span>
           <input type="text" name="remoteType" value="<%= job.remoteType || '' %>" />
         </label>
-        <label>Applicant Location Requirements
+        <label>
+          <span>Applicant Location Requirements</span>
           <input type="text" name="applicantLocationRequirements" value="<%= job.applicantLocationRequirements || '' %>" />
         </label>
       </div>
@@ -54,40 +65,51 @@
     <div class="row">
       <div>
         <h3>Address</h3>
-        <label>Street
+        <label>
+          <span>Street</span>
           <input type="text" name="addr_street" value="<%= (job.addresses && job.addresses[0]?.streetAddress) || '' %>" />
         </label>
-        <label>City
+        <label>
+          <span>City</span>
           <input type="text" name="addr_city" value="<%= (job.addresses && job.addresses[0]?.addressLocality) || '' %>" />
         </label>
-        <label>Region
+        <label>
+          <span>Region</span>
           <input type="text" name="addr_region" value="<%= (job.addresses && job.addresses[0]?.addressRegion) || '' %>" />
         </label>
-        <label>Postal Code
+        <label>
+          <span>Postal Code</span>
           <input type="text" name="addr_postal" value="<%= (job.addresses && job.addresses[0]?.postalCode) || '' %>" />
         </label>
-        <label>Country
+        <label>
+          <span>Country</span>
           <input type="text" name="addr_country" value="<%= (job.addresses && job.addresses[0]?.addressCountry) || '' %>" />
         </label>
       </div>
       <div>
         <h3>Dates & Salary</h3>
-        <label>Date Posted
+        <label>
+          <span>Date Posted</span>
           <input type="date" name="datePosted" value="<%= job.datePosted ? job.datePosted.substring(0, 10) : '' %>" />
         </label>
-        <label>Valid Through
+        <label>
+          <span>Valid Through</span>
           <input type="date" name="validThrough" value="<%= job.validThrough ? job.validThrough.substring(0, 10) : '' %>" />
         </label>
-        <label>Salary Currency
+        <label>
+          <span>Salary Currency</span>
           <input type="text" name="salary_currency" value="<%= job.salary?.currency || '' %>" />
         </label>
-        <label>Salary Min
+        <label>
+          <span>Salary Min</span>
           <input type="text" name="salary_min" value="<%= job.salary?.min ?? '' %>" />
         </label>
-        <label>Salary Max
+        <label>
+          <span>Salary Max</span>
           <input type="text" name="salary_max" value="<%= job.salary?.max ?? '' %>" />
         </label>
-        <label>Salary Unit
+        <label>
+          <span>Salary Unit</span>
           <input type="text" name="salary_unit" value="<%= job.salary?.unit || '' %>" />
         </label>
       </div>
