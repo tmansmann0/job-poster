@@ -51,6 +51,8 @@ export interface ExtractResult {
   confidences: Record<string, number>;
   warnings?: string[];
   rawModelOutput?: any;
+  failureReason?: string;
+  failureDetails?: any;
 }
 
 /** ===== Multi-tenant credential model ===== */
@@ -97,4 +99,7 @@ export interface JobRecord {
   missing: { [moduleId: string]: { fields: string[]; credentials: string[] } };
   confidences?: Record<string, number>;
   results?: Record<string, PublishResult>;
+  warnings?: string[];
+  failureReason?: string;
+  failureDetails?: any;
 }
