@@ -1,15 +1,131 @@
 <section class="card">
-  <h2>Ingest Job Posting</h2>
+  <h2>Ingest a Job Posting</h2>
+  <p class="muted">Drop in any public job URL and we will extract the structured data for you to review before publishing.</p>
   <form method="post" action="/ingest">
-    <label>Job URL
+    <label>
+      <span>Job URL</span>
       <input type="url" name="url" placeholder="https://example.com/job" required />
     </label>
-    <button type="submit">Extract & Review</button>
+    <button type="submit">Extract &amp; Review</button>
   </form>
 </section>
 
+<div class="grid">
+  <section class="card">
+    <h2>API Access</h2>
+    <p>The API is protected with an environment-defined key. Include the header <code>X-API-Key: &lt;your key&gt;</code> (or <code>?api_key=</code> in the query string) on every request.</p>
+    <p>
+      <strong>Endpoints</strong>
+      <ul>
+        <li><code>GET /api/modules</code> – discover available publishing platforms.</li>
+        <li><code>POST /api/jobs</code> – ingest, validate, and publish a job.</li>
+      </ul>
+    </p>
+    <p class="muted">Need the admin UI instead? Authenticate with the configured admin username/password when prompted.</p>
+  </section>
+
+  <section class="card">
+    <h2>Review Queue Snapshot</h2>
+    <div class="grid">
+      <div class="stat"><span>Total</span><strong><%= queueStats.total %></strong></div>
+      <div class="stat"><span>Waiting</span><strong><%= queueStats.held %></strong></div>
+      <div class="stat"><span>Published</span><strong><%= queueStats.published %></strong></div>
+      <div class="stat"><span>Failed</span><strong><%= queueStats.failed %></strong></div>
+    </div>
+
+    <% if (!queue.length) { %>
+      <p class="muted" style="margin-top: 1rem;">No jobs in the queue right now.</p>
+    <% } else { %>
+      <div class="queue-list">
+        <% queue.forEach(item => { %>
+          <% const statusClass = `status-${item.status.toLowerCase()}`; %>
+          <article class="queue-item">
+            <div style="display:flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;">
+              <div>
+                <h3><%= item.title %></h3>
+                <div class="queue-meta"><%= item.organization %> • Submitted <%= new Date(item.createdAt).toLocaleString() %></div>
+              </div>
+              <span class="status-pill <%= statusClass %>"><%= item.status %></span>
+            </div>
+            <div class="inline-list">
+              <% item.moduleNames.forEach(name => { %>
+                <span><%= name %></span>
+              <% }) %>
+            </div>
+            <% if (item.missing.length) { %>
+              <ul class="missing-list">
+                <% item.missing.forEach(m => { %>
+                  <li>
+                    <strong><%= m.moduleLabel %>:</strong>
+                    <% if (m.fields.length) { %>
+                      missing fields – <%= m.fields.join(', ') %>
+                    <% } %>
+                    <% if (m.credentials.length) { %>
+                      <span style="margin-left:0.25rem;">missing credentials – <%= m.credentials.join(', ') %></span>
+                    <% } %>
+                  </li>
+                <% }) %>
+              </ul>
+            <% } %>
+          </article>
+        <% }) %>
+      </div>
+      <p style="margin-top:1rem;">
+        <a href="/admin/holds">Open the full review queue →</a>
+      </p>
+    <% } %>
+  </section>
+</div>
+
 <section class="card">
-  <h2>API Overview</h2>
-  <p>Use <code>POST /api/jobs</code> with optional <code>url</code>, <code>fields</code>, <code>credentials</code>, and <code>modules</code> to publish jobs programmatically.</p>
-  <p><a href="/api/modules">View available modules</a></p>
+  <h2>Publishing Platforms</h2>
+  <p class="muted">Select one or many platforms when publishing. Each platform advertises the fields and credentials it needs.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th>
+        <th>Description</th>
+        <th>Required Fields</th>
+        <th>Optional Credentials</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% modules.forEach(mod => { %>
+        <tr>
+          <td>
+            <strong><%= mod.label %></strong><br />
+            <span class="muted"><code><%= mod.id %></code></span>
+          </td>
+          <td>
+            <%= mod.description || '—' %>
+            <% if (mod.docsUrl) { %>
+              <div><a href="<%= mod.docsUrl %>" target="_blank" rel="noopener">Docs</a></div>
+            <% } %>
+          </td>
+          <td>
+            <% if (mod.requiredFields.length) { %>
+              <ul class="missing-list">
+                <% mod.requiredFields.forEach(field => { %>
+                  <li><code><%= field %></code></li>
+                <% }) %>
+              </ul>
+            <% } else { %>
+              <span class="muted">None</span>
+            <% } %>
+          </td>
+          <td>
+            <% if (mod.optionalCredentials && mod.optionalCredentials.length) { %>
+              <ul class="missing-list">
+                <% mod.optionalCredentials.forEach(field => { %>
+                  <li><code><%= field %></code></li>
+                <% }) %>
+              </ul>
+            <% } else { %>
+              <span class="muted">Not required</span>
+            <% } %>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
 </section>
