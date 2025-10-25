@@ -52,6 +52,13 @@
                 <span><%= name %></span>
               <% }) %>
             </div>
+            <% if (item.warnings && item.warnings.length) { %>
+              <ul class="missing-list">
+                <% item.warnings.forEach(warning => { %>
+                  <li><span class="muted"><%= warning %></span></li>
+                <% }) %>
+              </ul>
+            <% } %>
             <% if (item.missing.length) { %>
               <ul class="missing-list">
                 <% item.missing.forEach(m => { %>

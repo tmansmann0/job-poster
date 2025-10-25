@@ -26,6 +26,13 @@
               <% if (h.sourceUrl) { %>
                 <div><a href="<%= h.sourceUrl %>" target="_blank" rel="noopener">Source</a></div>
               <% } %>
+              <% if (h.warnings && h.warnings.length) { %>
+                <ul class="missing-list">
+                  <% h.warnings.forEach(warning => { %>
+                    <li><span class="muted"><%= warning %></span></li>
+                  <% }) %>
+                </ul>
+              <% } %>
             </td>
             <td>
               <div class="inline-list">

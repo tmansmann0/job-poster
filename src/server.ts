@@ -162,6 +162,8 @@ app.get('/', async (_req, res) => {
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
     moduleNames: rec.selectedModules.map((id) => publisherDictionary[id] || id),
+    failureReason: rec.failureReason,
+    warnings: rec.warnings || [],
     missing: Object.entries(rec.missing || {}).map(([moduleId, info]) => ({
       moduleLabel: publisherDictionary[moduleId] || moduleId,
       fields: info.fields,
@@ -185,6 +187,7 @@ app.post('/ingest', async (req, res) => {
   try {
     const result = await extractFromUrl(url);
     const job = result.job || {};
+    const warnings = result.warnings || [];
     const prepared: JobPosting = {
       title: job.title || '',
       descriptionHTML: job.descriptionHTML || '',
@@ -203,7 +206,7 @@ app.post('/ingest', async (req, res) => {
 
     await render(res, 'review.ejs', {
       job: prepared,
-      warnings: result.warnings || [],
+      warnings,
       confidences: result.confidences || {},
       moduleOptions: listPublisherMeta(),
       selectedModules: PUBLISHERS.map((p) => p.id),
@@ -261,10 +264,16 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
   try {
     let extracted: Partial<JobPosting> = {};
     let confidences: Record<string, number> = {};
+    let extractionWarnings: string[] = [];
+    let extractionFailureReason: string | undefined;
+    let extractionFailureDetails: any;
     if (url) {
       const r = await extractFromUrl(url);
       extracted = r.job || {};
       confidences = r.confidences || {};
+      extractionWarnings = r.warnings || [];
+      extractionFailureReason = r.failureReason;
+      extractionFailureDetails = r.failureDetails;
     }
 
     const mergedPartial = deepMerge(extracted, fields || {});
@@ -310,19 +319,27 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     }
 
     const hasMissing = Object.keys(missing).length > 0;
-    if (hasMissing && holdIfIncomplete) {
+    const shouldHoldForFailure = Boolean(extractionFailureReason);
+    const shouldHoldForMissing = hasMissing && holdIfIncomplete;
+    if (shouldHoldForFailure || shouldHoldForMissing) {
       const rec = saveHold({
-        sourceUrl: url,
+        sourceUrl: url || job.sourceUrl,
         job,
         selectedModules: selectedIds,
         missing,
         confidences,
+        warnings: extractionWarnings,
+        failureReason: extractionFailureReason,
+        failureDetails: extractionFailureDetails,
       });
       return res.status(202).json({
         status: 'held',
         jobId: rec.id,
         reviewUrl: `${ctx.hostBaseUrl}/admin/jobs/${rec.id}`,
         missing,
+        warnings: rec.warnings || [],
+        failureReason: rec.failureReason,
+        confidences,
       });
     }
 
@@ -332,7 +349,7 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
       if (!pub) continue;
       results[id] = await pub.publish(job, ctx);
     }
-    return res.json({ status: 'published', results });
+    return res.json({ status: 'published', results, warnings: extractionWarnings });
   } catch (err: any) {
     return res.status(500).json({ status: 'error', error: err?.message || String(err) });
   }
@@ -357,9 +374,13 @@ app.get('/admin/jobs/:id', requireAdmin, async (req, res) => {
   if (!rec) {
     return res.status(404).send('Not found');
   }
+  const warnings = [...(rec.warnings || [])];
+  if (Object.keys(rec.missing || {}).length) {
+    warnings.push('Held due to missing information for one or more publishers.');
+  }
   await render(res, 'review.ejs', {
     job: rec.job,
-    warnings: [`Held due to missing: ${JSON.stringify(rec.missing)}`],
+    warnings,
     confidences: rec.confidences || {},
     moduleOptions: listPublisherMeta(),
     selectedModules: rec.selectedModules,
