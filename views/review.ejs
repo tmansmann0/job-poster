@@ -1,0 +1,30 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Review Job Data</title>
+</head>
+<body>
+  <h1>Review Job Data</h1>
+  <form action="/publish" method="post">
+    <% for(const key in job) { const field = job[key]; %>
+      <label><%= key %> (confidence: <%= (field as any).confidence %>):
+        <% if(key === 'description') { %>
+          <textarea name="<%= key %>" rows="5"><%= field.value %></textarea>
+        <% } else { %>
+          <input type="text" name="<%= key %>" value="<%= field.value %>" />
+        <% } %>
+      </label>
+      <br/>
+    <% } %>
+    <label>Publish to:
+      <% for(const key in modules) { %>
+        <label><input type="checkbox" name="modules" value="<%= key %>" checked /> <%= key %></label>
+      <% } %>
+    </label>
+    <br/>
+    <button type="submit">Publish</button>
+  </form>
+</body>
+</html>
