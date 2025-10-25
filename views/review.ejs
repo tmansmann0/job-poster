@@ -1,30 +1,110 @@
+<section class="card">
+  <h2>Review & Edit Job</h2>
+  <% if (warnings && warnings.length) { %>
+    <div>
+      <strong>Warnings:</strong>
+      <ul>
+        <% warnings.forEach(w => { %>
+          <li><%= w %></li>
+        <% }) %>
+      </ul>
+    </div>
+  <% } %>
+  <form method="post" action="<%= formAction %>">
+    <div class="row">
+      <div>
+        <label>Source URL
+          <input type="url" name="sourceUrl" value="<%= job.sourceUrl || '' %>" />
+        </label>
+        <label>Title
+          <input type="text" name="title" value="<%= job.title || '' %>" required />
+        </label>
+        <label>Description (HTML)
+          <textarea name="descriptionHTML"><%= job.descriptionHTML || '' %></textarea>
+        </label>
+        <label>Apply URL
+          <input type="url" name="applyUrl" value="<%= job.applyUrl || '' %>" />
+        </label>
+        <label>Reference ID
+          <input type="text" name="refId" value="<%= job.refId || '' %>" />
+        </label>
+      </div>
+      <div>
+        <label>Organization Name
+          <input type="text" name="orgName" value="<%= job.hiringOrganization?.name || '' %>" required />
+        </label>
+        <label>Organization Website
+          <input type="url" name="orgWebsite" value="<%= job.hiringOrganization?.website || '' %>" />
+        </label>
+        <label>Organization Logo URL
+          <input type="url" name="orgLogo" value="<%= job.hiringOrganization?.logoUrl || '' %>" />
+        </label>
+        <label>Employment Type
+          <input type="text" name="employmentType" value="<%= job.employmentType || '' %>" />
+        </label>
+        <label>Remote Type
+          <input type="text" name="remoteType" value="<%= job.remoteType || '' %>" />
+        </label>
+        <label>Applicant Location Requirements
+          <input type="text" name="applicantLocationRequirements" value="<%= job.applicantLocationRequirements || '' %>" />
+        </label>
+      </div>
+    </div>
 
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Review Job Data</title>
-</head>
-<body>
-  <h1>Review Job Data</h1>
-  <form action="/publish" method="post">
-    <% for(const key in job) { const field = job[key]; %>
-      <label><%= key %> (confidence: <%= (field as any).confidence %>):
-        <% if(key === 'description') { %>
-          <textarea name="<%= key %>" rows="5"><%= field.value %></textarea>
-        <% } else { %>
-          <input type="text" name="<%= key %>" value="<%= field.value %>" />
-        <% } %>
-      </label>
-      <br/>
+    <div class="row">
+      <div>
+        <h3>Address</h3>
+        <label>Street
+          <input type="text" name="addr_street" value="<%= (job.addresses && job.addresses[0]?.streetAddress) || '' %>" />
+        </label>
+        <label>City
+          <input type="text" name="addr_city" value="<%= (job.addresses && job.addresses[0]?.addressLocality) || '' %>" />
+        </label>
+        <label>Region
+          <input type="text" name="addr_region" value="<%= (job.addresses && job.addresses[0]?.addressRegion) || '' %>" />
+        </label>
+        <label>Postal Code
+          <input type="text" name="addr_postal" value="<%= (job.addresses && job.addresses[0]?.postalCode) || '' %>" />
+        </label>
+        <label>Country
+          <input type="text" name="addr_country" value="<%= (job.addresses && job.addresses[0]?.addressCountry) || '' %>" />
+        </label>
+      </div>
+      <div>
+        <h3>Dates & Salary</h3>
+        <label>Date Posted
+          <input type="date" name="datePosted" value="<%= job.datePosted ? job.datePosted.substring(0, 10) : '' %>" />
+        </label>
+        <label>Valid Through
+          <input type="date" name="validThrough" value="<%= job.validThrough ? job.validThrough.substring(0, 10) : '' %>" />
+        </label>
+        <label>Salary Currency
+          <input type="text" name="salary_currency" value="<%= job.salary?.currency || '' %>" />
+        </label>
+        <label>Salary Min
+          <input type="text" name="salary_min" value="<%= job.salary?.min ?? '' %>" />
+        </label>
+        <label>Salary Max
+          <input type="text" name="salary_max" value="<%= job.salary?.max ?? '' %>" />
+        </label>
+        <label>Salary Unit
+          <input type="text" name="salary_unit" value="<%= job.salary?.unit || '' %>" />
+        </label>
+      </div>
+    </div>
+
+    <% if (moduleOptions && moduleOptions.length) { %>
+      <fieldset>
+        <legend>Publish Targets</legend>
+        <% moduleOptions.forEach(mod => { %>
+          <label>
+            <input type="checkbox" name="targets" value="<%= mod.id %>" <%= selectedModules.includes(mod.id) ? 'checked' : '' %> />
+            <strong><%= mod.label %></strong> (requires: <%= mod.requiredFields.join(', ') %>)
+          </label>
+        <% }) %>
+      </fieldset>
     <% } %>
-    <label>Publish to:
-      <% for(const key in modules) { %>
-        <label><input type="checkbox" name="modules" value="<%= key %>" checked /> <%= key %></label>
-      <% } %>
-    </label>
-    <br/>
+
     <button type="submit">Publish</button>
   </form>
-</body>
-</html>
+</section>

@@ -1,85 +1,121 @@
+import type { JobPosting, PublishContext, PublishResult, ModuleMeta } from '../types.js';
 
-import { PublisherModule, JobData } from '../types.js';
-import { request, gql } from 'graphql-request';
-import * as dotenv from 'dotenv';
-dotenv.config();
+async function getIndeedToken(clientId: string, clientSecret: string): Promise<string> {
+  const body = new URLSearchParams();
+  body.set('grant_type', 'client_credentials');
+  body.set('client_id', clientId);
+  body.set('client_secret', clientSecret);
+  body.set('scope', 'employer_access');
 
-const INDEED_CLIENT_ID = process.env.INDEED_CLIENT_ID;
-const INDEED_CLIENT_SECRET = process.env.INDEED_CLIENT_SECRET;
-
-async function getAccessToken(): Promise<string> {
-  if (!INDEED_CLIENT_ID || !INDEED_CLIENT_SECRET) {
-    throw new Error('Indeed credentials missing');
-  }
-  const params = new URLSearchParams();
-  params.append('grant_type', 'client_credentials');
-  params.append('client_id', INDEED_CLIENT_ID);
-  params.append('client_secret', INDEED_CLIENT_SECRET);
-  params.append('scope', 'employer_access');
   const res = await fetch('https://apis.indeed.com/oauth/v2/tokens', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: params
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
   });
   if (!res.ok) {
-    throw new Error('Failed to get token: ' + res.status);
+    const text = await res.text();
+    throw new Error(`Indeed token error ${res.status}: ${text}`);
   }
-  const data = await res.json();
-  return data.access_token;
+  const json: any = await res.json();
+  return json.access_token as string;
 }
 
-async function publish(job: JobData): Promise<{ success: boolean; message: string }> {
-  try {
-    const token = await getAccessToken();
-    const endpoint = 'https://apis.indeed.com/graphql';
-    const mutation = gql`
-    mutation CreateSourcedJob($input: [jobsIngestCreateSourcedJobPostingsInput!]!) {
+function buildGraphQLCreate(job: JobPosting) {
+  const mutation = `
+    mutation CreateSourcedJobs($jobs: [SourcedJobPostingInput!]!) {
       jobsIngest {
-        createSourcedJobPostings(jobPostings: $input) {
-          sourcedPostingId
-          jobPostingId
+        createSourcedJobPostings(jobPostings: $jobs) {
+          jobPostings {
+            sourcedPostingId
+            status
+            errors { field message }
+          }
         }
       }
     }
-    `;
+  `;
 
-    const input = [
-      {
-        body: {
-          title: job.title,
-          description: job.description,
-          location: { country: 'US', cityRegionPostal: job.location },
-          benefits: []
-        },
-        metadata: {
-          jobSource: {
-            companyName: job.organization,
-            sourceName: 'CustomATS',
-            sourceType: 'Employer'
-          },
-          jobPostingId: String(Date.now()),
-          datePublished: job.datePosted || new Date().toISOString(),
-          url: job.applyUrl || ''
-        }
-      }
-    ];
+  const location = (() => {
+    const a = job.addresses?.[0];
+    let s = '';
+    if (a?.addressCountry) s += `${a.addressCountry}`;
+    const cityState = [a?.addressLocality, a?.addressRegion].filter(Boolean).join(', ');
+    const pc = a?.postalCode ? ` ${a?.postalCode}` : '';
+    if (cityState || pc) s += `${s ? ', ' : ''}${cityState}${pc}`;
+    return { country: a?.addressCountry || 'US', cityRegionPostal: s || 'US' };
+  })();
 
-    const headers = {
-      Authorization: `Bearer ${token}`
-    };
-    const variables = { input };
-    const res = await request(endpoint, mutation, variables, headers);
-    return { success: true, message: 'Job posted to Indeed: ' + JSON.stringify(res) };
-  } catch (err: any) {
-    return { success: false, message: err.message };
-  }
+  const body = {
+    title: job.title,
+    description: job.descriptionHTML,
+    location,
+    employmentType: job.employmentType || 'FULL_TIME',
+    applyUrl: job.applyUrl,
+  };
+
+  const metadata = {
+    jobSource: {
+      companyName: job.hiringOrganization?.name || 'Unknown Company',
+      sourceName: 'CustomATS',
+      sourceType: 'Employer',
+    },
+    jobPostingId: job.refId || `ref-${Date.now()}`,
+    datePublished: job.datePosted || new Date().toISOString(),
+    url: job.sourceUrl || job.applyUrl,
+  };
+
+  const variables = { jobs: [{ body, metadata }] };
+  return { mutation, variables };
 }
 
-const module: PublisherModule = {
-  name: 'indeed',
-  publish
+const meta: ModuleMeta = {
+  id: 'indeed',
+  label: 'Indeed (GraphQL Job Sync)',
+  description:
+    'Creates/updates job posts directly in Indeed via partner GraphQL API (OAuth2 client-credentials).',
+  requiredFields: ['title', 'descriptionHTML', 'hiringOrganization.name'],
+  optionalFields: ['addresses', 'remoteType', 'employmentType', 'applyUrl', 'datePosted', 'refId', 'salary'],
+  requiredCredentials: ['indeed.clientId', 'indeed.clientSecret'],
+  optionalCredentials: [],
+  docsUrl: 'https://apis.indeed.com/',
 };
 
-export default module;
+export const indeedPublisher = {
+  id: meta.id,
+  label: meta.label,
+  meta,
+  async publish(job: JobPosting, ctx: PublishContext): Promise<PublishResult> {
+    const clientId = ctx.creds.indeed?.clientId || process.env.INDEED_CLIENT_ID;
+    const clientSecret = ctx.creds.indeed?.clientSecret || process.env.INDEED_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return {
+        ok: false,
+        error: 'Indeed credentials missing (provide per-request or set INDEED_CLIENT_ID/INDEED_CLIENT_SECRET).',
+      };
+    }
+    try {
+      const token = await getIndeedToken(clientId, clientSecret);
+      const { mutation, variables } = buildGraphQLCreate(job);
+
+      const res = await fetch('https://apis.indeed.com/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ query: mutation, variables }),
+      });
+      const json: any = await res.json();
+      if (!res.ok || json.errors) {
+        return { ok: false, error: `Indeed API error: ${res.status} ${JSON.stringify(json.errors || json)}` };
+      }
+      const node = json?.data?.jobsIngest?.createSourcedJobPostings?.jobPostings?.[0];
+      if (node?.errors?.length) {
+        return { ok: false, error: `Indeed rejected: ${JSON.stringify(node.errors)}` };
+      }
+      return { ok: true, id: node?.sourcedPostingId, details: node };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+} as const;

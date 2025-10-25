@@ -1,0 +1,21 @@
+<section class="card">
+  <h2>Publish Results</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th>Status</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% results.forEach(r => { %>
+        <tr>
+          <td><%= r.targetLabel %></td>
+          <td><%= r.ok ? 'OK' : 'Error' %></td>
+          <td><pre><%= JSON.stringify(r, null, 2) %></pre></td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</section>

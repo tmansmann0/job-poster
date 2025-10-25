@@ -1,0 +1,17 @@
+<section class="card">
+  <h2>Held Jobs – Need Human Review</h2>
+  <% if (!holds.length) { %>
+    <p>No held jobs 🎉</p>
+  <% } else { %>
+    <ul>
+      <% holds.forEach(h => { %>
+        <li>
+          <strong><%= h.job.title || '(Untitled)' %></strong>
+          — <%= h.job.hiringOrganization?.name || 'Unknown org' %>
+          — <em><%= h.createdAt %></em>
+          — <a href="/admin/jobs/<%= h.id %>">Review & Publish</a>
+        </li>
+      <% }) %>
+    </ul>
+  <% } %>
+</section>
