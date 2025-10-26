@@ -1,0 +1,92 @@
+<section class="card">
+  <h2>Hosted Google Job Pages</h2>
+  <% if (!pages || !pages.length) { %>
+    <p class="muted">No hosted pages yet. Publish a job via the Google module to create one.</p>
+  <% } else { %>
+    <div class="grid">
+      <div class="stat">
+        <span>Total Pages</span>
+        <strong><%= pages.length %></strong>
+      </div>
+      <div class="stat">
+        <span>Indexing Ready</span>
+        <strong><%= pages.filter((p) => p.indexing && p.indexing.status === 'succeeded').length %></strong>
+      </div>
+      <div class="stat">
+        <span>Needs Attention</span>
+        <strong><%= pages.filter((p) => !p.indexing || p.indexing.status !== 'succeeded').length %></strong>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Organization</th>
+          <th>Hosted URL</th>
+          <th>Apply URL</th>
+          <th>Indexing</th>
+          <th>Created</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% pages.forEach((page) => { %>
+          <tr>
+            <td>
+              <strong><%= page.title %></strong><br />
+              <span class="muted">Slug: <code><%= page.slug %></code></span>
+            </td>
+            <td><%= page.organization || '—' %></td>
+            <td>
+              <% if (page.hostedUrl) { %>
+                <a href="<%= page.hostedUrl %>" target="_blank" rel="noopener">Visit page</a>
+              <% } else { %>
+                <span class="muted">(hosted file only)</span>
+              <% } %>
+            </td>
+            <td>
+              <% if (page.applyUrl) { %>
+                <a href="<%= page.applyUrl %>" target="_blank" rel="noopener">Apply link</a>
+              <% } else { %>
+                <span class="muted">—</span>
+              <% } %>
+            </td>
+            <td>
+              <% if (page.indexing) { %>
+                <% if (page.indexing.status === 'succeeded') { %>
+                  <span class="status-pill status-published">Submitted</span>
+                <% } else if (page.indexing.status === 'failed') { %>
+                  <span class="status-pill status-failed">Failed</span>
+                <% } else { %>
+                  <span class="status-pill status-held">Skipped</span>
+                <% } %>
+                <% if (page.indexing.reason) { %>
+                  <div class="muted"><%= page.indexing.reason %></div>
+                <% } %>
+                <% if (page.indexing.lastAttemptedAt) { %>
+                  <div class="muted">Last attempted: <%= new Date(page.indexing.lastAttemptedAt).toLocaleString() %></div>
+                <% } %>
+              <% } else { %>
+                <span class="muted">No indexing record</span>
+              <% } %>
+            </td>
+            <td><%= new Date(page.createdAt).toLocaleString() %></td>
+            <td><%= new Date(page.updatedAt).toLocaleString() %></td>
+            <td>
+              <div class="inline-list">
+                <% if (page.hostedUrl) { %>
+                  <a href="<%= page.hostedUrl %>" target="_blank" rel="noopener">View</a>
+                <% } %>
+                <a href="/jobs/<%= page.slug %>/job.json" target="_blank" rel="noopener">JSON</a>
+                <form action="/admin/hosted/<%= page.slug %>/delete" method="post" style="display:inline" onsubmit="return confirm('Delete hosted page <%= page.slug %>? This cannot be undone.');">
+                  <button type="submit">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</section>

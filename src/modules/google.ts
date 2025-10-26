@@ -3,10 +3,85 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { JWT } from 'google-auth-library';
 import { makeSlug } from '../util/slug.js';
-import type { JobPosting, PublishContext, PublishResult, ModuleMeta } from '../types.js';
+import type {
+  JobPosting,
+  PublishContext,
+  PublishResult,
+  ModuleMeta,
+} from '../types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const JOBS_ROOT = path.resolve(__dirname, '../../jobs');
+const DEFAULT_HOST_BASE = (
+  process.env.ORIGIN ||
+  process.env.PUBLIC_HOST_BASE_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  'https://job-poster-r0c5.onrender.com'
+).replace(/\/+$/, '');
+
+const HTML_ESCAPE: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+const escapeHtml = (value: string | undefined) =>
+  (value || '').replace(/[&<>"']/g, (char) => HTML_ESCAPE[char] || char);
+
+export type IndexingStatus = 'skipped' | 'succeeded' | 'failed';
+
+export interface HostedJobMetadata {
+  slug: string;
+  title: string;
+  organization?: string;
+  hostedUrl: string;
+  applyUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  indexing?: {
+    status: IndexingStatus;
+    reason?: string;
+    lastAttemptedAt?: string;
+    response?: any;
+  };
+}
+
+const getJobDir = (slug: string) => path.resolve(JOBS_ROOT, slug);
+const getMetaPath = (slug: string) => path.resolve(getJobDir(slug), 'meta.json');
+
+async function loadExistingMeta(slug: string): Promise<HostedJobMetadata | null> {
+  try {
+    const raw = await fs.promises.readFile(getMetaPath(slug), 'utf-8');
+    return JSON.parse(raw) as HostedJobMetadata;
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function persistHostedJobMeta(
+  slug: string,
+  updates: Omit<HostedJobMetadata, 'slug' | 'createdAt' | 'updatedAt'> &
+    Partial<Pick<HostedJobMetadata, 'createdAt'>>,
+): Promise<HostedJobMetadata> {
+  const existing = await loadExistingMeta(slug);
+  const createdAt = updates.createdAt || existing?.createdAt || new Date().toISOString();
+  const meta: HostedJobMetadata = {
+    slug,
+    title: updates.title || existing?.title || '(Untitled job)',
+    organization: updates.organization ?? existing?.organization,
+    hostedUrl: updates.hostedUrl || existing?.hostedUrl || '',
+    applyUrl: updates.applyUrl ?? existing?.applyUrl,
+    createdAt,
+    updatedAt: new Date().toISOString(),
+    indexing: updates.indexing ?? existing?.indexing,
+  };
+  await fs.promises.writeFile(getMetaPath(slug), JSON.stringify(meta, null, 2), 'utf-8');
+  return meta;
+}
 
 function jobToJsonLd(job: JobPosting) {
   const jobLocation = job.remoteType === 'REMOTE'
@@ -66,24 +141,33 @@ function jobToJsonLd(job: JobPosting) {
   return jsonld;
 }
 
-async function ensureJobStored(job: JobPosting, slug: string) {
-  const jobsDir = path.resolve(__dirname, '../../jobs', slug);
+async function ensureJobStored(job: JobPosting, slug: string, hostedUrl: string) {
+  const jobsDir = getJobDir(slug);
   await fs.promises.mkdir(jobsDir, { recursive: true });
   await fs.promises.writeFile(
     path.resolve(jobsDir, 'job.json'),
     JSON.stringify(job, null, 2),
     'utf-8',
   );
+  const canonical = job.applyUrl || hostedUrl;
+  const applyLink = job.applyUrl
+    ? `<p><a href="${escapeHtml(job.applyUrl)}">Apply on company site</a></p>`
+    : '';
   const html = `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>${job.title}</title>
+    <title>${escapeHtml(job.title)}</title>
+    <link rel="canonical" href="${escapeHtml(canonical)}" />
+    <meta name="robots" content="index,follow" />
     <script type="application/ld+json">${JSON.stringify(jobToJsonLd(job))}</script>
   </head>
   <body>
-    <h1>${job.title}</h1>
-    <div>${job.descriptionHTML}</div>
+    <main>
+      <h1>${escapeHtml(job.title)}</h1>
+      <section>${job.descriptionHTML}</section>
+      ${applyLink}
+    </main>
   </body>
 </html>`;
   await fs.promises.writeFile(path.resolve(jobsDir, 'index.html'), html, 'utf-8');
@@ -161,17 +245,117 @@ export const googlePublisher = {
 
     const slugSeed = `${job.title}-${job.hiringOrganization?.name}`;
     const slug = makeSlug(slugSeed, Math.floor(Math.random() * 1e6).toString(36));
-    await ensureJobStored(job, slug);
+    const hostBase = (ctx.hostBaseUrl || DEFAULT_HOST_BASE).replace(/\/+$/, '');
+    const hostedUrl = `${hostBase}/jobs/${slug}/`;
+    await ensureJobStored(job, slug, hostedUrl);
 
-    const hostedUrl = `${ctx.hostBaseUrl}/jobs/${slug}/`;
+    const saJson =
+      ctx.creds.google?.serviceAccountJson || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 
-    let indexingDetails: any;
-    const saJson = ctx.creds.google?.serviceAccountJson || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    const indexingAttemptedAt = new Date().toISOString();
+    let indexingStatus: IndexingStatus = 'skipped';
+    let indexingReason = 'Google Indexing API credentials not configured.';
+    let indexingResponse: any;
+    let lastAttemptedAt: string | undefined = indexingAttemptedAt;
     if (saJson) {
       const idx = await callIndexingApi(hostedUrl, saJson);
-      indexingDetails = idx.ok ? idx.res : { error: idx.error };
+      if (idx.ok) {
+        indexingStatus = 'succeeded';
+        indexingReason = undefined;
+        indexingResponse = idx.res;
+      } else {
+        indexingStatus = 'failed';
+        indexingReason = idx.error;
+      }
     }
 
-    return { ok: true, url: hostedUrl, id: slug, details: { indexing: indexingDetails } };
+    await persistHostedJobMeta(slug, {
+      title: job.title,
+      organization: job.hiringOrganization?.name,
+      hostedUrl,
+      applyUrl: job.applyUrl,
+      indexing: {
+        status: indexingStatus,
+        reason: indexingReason,
+        lastAttemptedAt,
+        response: indexingResponse,
+      },
+    });
+
+    const ok = indexingStatus === 'succeeded';
+    const error =
+      indexingStatus === 'succeeded'
+        ? undefined
+        : indexingReason ||
+          (indexingStatus === 'failed'
+            ? 'Google Indexing API request failed.'
+            : 'Google Indexing API credentials not configured.');
+
+    return {
+      ok,
+      url: hostedUrl,
+      id: slug,
+      error,
+      details: {
+        hostedUrl,
+        applyUrl: job.applyUrl,
+        indexing: {
+          status: indexingStatus,
+          reason: indexingReason,
+          lastAttemptedAt,
+          response: indexingResponse,
+        },
+      },
+    };
   },
 } as const;
+
+export async function listHostedJobPages(): Promise<HostedJobMetadata[]> {
+  try {
+    const entries = await fs.promises.readdir(JOBS_ROOT, { withFileTypes: true });
+    const summaries: HostedJobMetadata[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const slug = entry.name;
+      const jobDir = getJobDir(slug);
+      const meta = await loadExistingMeta(slug);
+      if (meta) {
+        summaries.push(meta);
+        continue;
+      }
+      try {
+        const jobJson = await fs.promises.readFile(
+          path.resolve(jobDir, 'job.json'),
+          'utf-8',
+        );
+        const job = JSON.parse(jobJson) as JobPosting;
+        const stats = await fs.promises.stat(path.resolve(jobDir, 'job.json'));
+        const createdAt =
+          typeof stats.birthtime?.toISOString === 'function'
+            ? stats.birthtime.toISOString()
+            : stats.mtime.toISOString();
+        summaries.push({
+          slug,
+          title: job.title || '(Untitled job)',
+          organization: job.hiringOrganization?.name,
+          hostedUrl: `${DEFAULT_HOST_BASE}/jobs/${slug}/`,
+          applyUrl: job.applyUrl,
+          createdAt,
+          updatedAt: stats.mtime.toISOString(),
+        });
+      } catch (err) {
+        // Ignore malformed entries but continue processing others
+      }
+    }
+    summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return summaries;
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+export async function deleteHostedJob(slug: string): Promise<void> {
+  const dir = getJobDir(slug);
+  await fs.promises.rm(dir, { recursive: true, force: true });
+}
