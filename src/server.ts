@@ -114,12 +114,6 @@ function applyJobDefaults(job: JobPosting, urlHint?: string): JobPosting {
     ...org,
     name: orgName || DEFAULT_COMPANY_NAME,
   };
-  if (job.salary) {
-    job.salary = {
-      ...job.salary,
-      currency: job.salary.currency || 'USD',
-    };
-  }
   return job;
 }
 
