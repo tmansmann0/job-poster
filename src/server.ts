@@ -7,6 +7,7 @@ import type { JobPosting, PublishContext, PublishResult, Credentials } from './t
 import { extractFromUrl } from './ai/extractor.js';
 import { sanitizeDescription } from './util/html.js';
 import { PUBLISHERS, getPublisherById, listPublisherMeta } from './modules/publisher.js';
+import { deleteHostedJob, listHostedJobPages } from './modules/google.js';
 import { saveHold, listHolds, getJob, markPublished } from './store.js';
 
 const app = express();
@@ -170,9 +171,20 @@ function jobFromForm(body: any): JobPosting {
   return applyJobDefaults(job, body.sourceUrl || undefined);
 }
 
+function determineHostBaseUrl() {
+  const configured =
+    process.env.ORIGIN ||
+    process.env.PUBLIC_HOST_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL;
+  if (configured) {
+    return configured.replace(/\/+$/, '');
+  }
+  return 'https://job-poster-r0c5.onrender.com';
+}
+
 function buildContext(creds?: Credentials): PublishContext {
   return {
-    hostBaseUrl: process.env.ORIGIN || `http://localhost:${PORT}`,
+    hostBaseUrl: determineHostBaseUrl(),
     creds: {
       google: {
         serviceAccountJson: creds?.google?.serviceAccountJson || process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
@@ -462,6 +474,17 @@ app.get('/admin/holds', requireAdmin, async (_req, res) => {
     })),
   }));
   await render(res, 'admin_holds.ejs', { holds, title: 'Held Jobs' });
+});
+
+app.get('/admin/hosted', requireAdmin, async (_req, res) => {
+  const pages = await listHostedJobPages();
+  await render(res, 'admin_hosted.ejs', { title: 'Hosted Pages', pages });
+});
+
+app.post('/admin/hosted/:slug/delete', requireAdmin, async (req, res) => {
+  const { slug } = req.params;
+  await deleteHostedJob(slug);
+  res.redirect('/admin/hosted');
 });
 
 app.get('/admin/jobs/:id', requireAdmin, async (req, res) => {
