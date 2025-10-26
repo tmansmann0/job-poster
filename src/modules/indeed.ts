@@ -1,30 +1,56 @@
 import type { JobPosting, PublishContext, PublishResult, ModuleMeta } from '../types.js';
 
+const BASE_URL = process.env.INDEED_API_BASE_URL || 'https://apis.indeed.com';
+const GRAPHQL_URL = process.env.INDEED_GRAPHQL_URL || `${BASE_URL}/graphql`;
+const OAUTH_URL = process.env.INDEED_OAUTH_URL || `${BASE_URL}/oauth/v2/tokens`;
+const OAUTH_SCOPE = process.env.INDEED_OAUTH_SCOPE || 'employer_access';
+
+const mask = (value?: string) => {
+  if (!value) return 'unset';
+  if (value.length <= 4) return '****';
+  return `${value.slice(0, 2)}…${value.slice(-2)}`;
+};
+
 async function getIndeedToken(clientId: string, clientSecret: string): Promise<string> {
   const body = new URLSearchParams();
   body.set('grant_type', 'client_credentials');
   body.set('client_id', clientId);
   body.set('client_secret', clientSecret);
-  body.set('scope', 'employer_access');
+  body.set('scope', OAUTH_SCOPE);
 
-  const res = await fetch('https://apis.indeed.com/oauth/v2/tokens', {
+  console.info('[indeed] requesting OAuth token', {
+    clientId: mask(clientId),
+    scope: OAUTH_SCOPE,
+    oauthUrl: OAUTH_URL,
+  });
+
+  const res = await fetch(OAUTH_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   });
   if (!res.ok) {
     const text = await res.text();
+    console.error('[indeed] OAuth token request failed', {
+      status: res.status,
+      statusText: res.statusText,
+      body: text,
+    });
     throw new Error(`Indeed token error ${res.status}: ${text}`);
   }
   const json: any = await res.json();
+  console.info('[indeed] obtained OAuth token', {
+    expiresIn: json.expires_in,
+    tokenType: json.token_type,
+  });
   return json.access_token as string;
 }
 
 function buildGraphQLCreate(job: JobPosting) {
   const mutation = `
-    mutation CreateSourcedJobs($jobs: [SourcedJobPostingInput!]!) {
+    mutation CreateSourcedJobs($input: CreateSourcedJobPostingsInput!) {
       jobsIngest {
-        createSourcedJobPostings(jobPostings: $jobs) {
+        createSourcedJobPostings(input: $input) {
           jobPostings {
             sourcedPostingId
             status
@@ -64,7 +90,16 @@ function buildGraphQLCreate(job: JobPosting) {
     url: job.sourceUrl || job.applyUrl,
   };
 
-  const variables = { jobs: [{ body, metadata }] };
+  const variables = {
+    input: {
+      jobPostings: [
+        {
+          body,
+          metadata,
+        },
+      ],
+    },
+  };
   return { mutation, variables };
 }
 
@@ -96,8 +131,14 @@ export const indeedPublisher = {
     try {
       const token = await getIndeedToken(clientId, clientSecret);
       const { mutation, variables } = buildGraphQLCreate(job);
+      const jobPostingId = variables.input.jobPostings[0].metadata.jobPostingId;
 
-      const res = await fetch('https://apis.indeed.com/graphql', {
+      console.info('[indeed] submitting job posting', {
+        jobPostingId,
+        graphqlUrl: GRAPHQL_URL,
+      });
+
+      const res = await fetch(GRAPHQL_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,14 +148,34 @@ export const indeedPublisher = {
       });
       const json: any = await res.json();
       if (!res.ok || json.errors) {
-        return { ok: false, error: `Indeed API error: ${res.status} ${JSON.stringify(json.errors || json)}` };
+        console.error('[indeed] GraphQL request failed', {
+          status: res.status,
+          statusText: res.statusText,
+          response: json,
+        });
+        const message =
+          res.status === 401 || res.status === 403
+            ? 'Indeed API rejected the credentials (check client ID/secret or environment).'
+            : `Indeed API error: ${res.status}`;
+        return { ok: false, error: `${message} ${JSON.stringify(json.errors || json)}` };
       }
       const node = json?.data?.jobsIngest?.createSourcedJobPostings?.jobPostings?.[0];
       if (node?.errors?.length) {
+        console.warn('[indeed] job posting rejected', {
+          jobPostingId,
+          errors: node.errors,
+        });
         return { ok: false, error: `Indeed rejected: ${JSON.stringify(node.errors)}` };
       }
+      console.info('[indeed] job posting submitted successfully', {
+        jobPostingId,
+        status: node?.status,
+      });
       return { ok: true, id: node?.sourcedPostingId, details: node };
     } catch (err: any) {
+      console.error('[indeed] unexpected error', {
+        message: err?.message,
+      });
       return { ok: false, error: err?.message || String(err) };
     }
   },

@@ -1,10 +1,17 @@
 import axios from 'axios';
 import { gotScraping } from 'got-scraping';
 import { decode } from 'html-entities';
+import { jsonrepair } from 'jsonrepair';
 import { ExtractResult, JobPosting } from '../types.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'gpt-5-mini';
+const SYSTEM_MESSAGE = [
+  'You are a meticulous data extraction assistant.',
+  'Return valid JSON that matches the requested schema.',
+  'Do not guess when the source provides no evidence—use null instead.',
+  'Respect all field-specific guidance supplied by the user.',
+].join('\n');
 
 function stripScripts(html: string): string {
   return html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ');
@@ -39,7 +46,94 @@ function extractVisibleText(html: string): string {
   return decoded.replace(/\s+/g, ' ').trim().slice(0, 15000);
 }
 
-function buildPrompt(url: string, html: string): { prompt: string; metadata: string } {
+const EXTRACTION_SCHEMA = `type ExtractionResult = {
+  job: {
+    sourceUrl: string | null;
+    title: string | null;
+    descriptionHTML: string | null;
+    hiringOrganization: {
+      name: string | null;
+      website: string | null;
+      logoUrl: string | null;
+    } | null;
+    employmentType: 'FULL_TIME' | 'PART_TIME' | 'CONTRACT' | 'TEMPORARY' | 'INTERN' | 'VOLUNTEER' | 'PER_DIEM' | 'OTHER' | null;
+    datePosted: string | null;
+    validThrough: string | null;
+    applyUrl: string | null;
+    refId: string | null;
+    remoteType: 'ONSITE' | 'REMOTE' | 'HYBRID' | null;
+    applicantLocationRequirements: string | null;
+    addresses: Array<{
+      streetAddress: string | null;
+      addressLocality: string | null;
+      addressRegion: string | null;
+      postalCode: string | null;
+      addressCountry: string | null;
+    }> | null;
+    salary: {
+      currency: string | null;
+      min: number | null;
+      max: number | null;
+      unit: 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR' | null;
+    } | null;
+  };
+  confidences: Record<string, number>;
+  warnings: string[];
+}`;
+
+const JSON_SHAPE_EXAMPLE = `{
+  "job": {
+    "sourceUrl": "https://example.com/job", 
+    "title": "<string|null>",
+    "descriptionHTML": "<string|null>",
+    "hiringOrganization": {
+      "name": "<string|null>",
+      "website": "<string|null>",
+      "logoUrl": "<string|null>"
+    },
+    "employmentType": "<enum|null>",
+    "datePosted": "<ISO8601|null>",
+    "validThrough": "<ISO8601|null>",
+    "applyUrl": "<string|null>",
+    "refId": "<string|null>",
+    "remoteType": "<enum|null>",
+    "applicantLocationRequirements": "<string|null>",
+    "addresses": [
+      {
+        "streetAddress": "<string|null>",
+        "addressLocality": "<string|null>",
+        "addressRegion": "<string|null>",
+        "postalCode": "<string|null>",
+        "addressCountry": "<ISO-2|null>"
+      }
+    ],
+    "salary": {
+      "currency": "<ISO-4217|null>",
+      "min": <number|null>,
+      "max": <number|null>,
+      "unit": "<enum|null>"
+    }
+  },
+  "confidences": {
+    "job.title": 0.8
+  },
+  "warnings": []
+}`;
+
+function buildGuidelines(url: string): string {
+  return [
+    `- Set job.sourceUrl to ${url}.`,
+    '- If the apply URL is missing, reuse the source URL.',
+    '- Use ISO 8601 dates (include timezone).',
+    '- Preserve important formatting in descriptionHTML using simple HTML tags.',
+    '- Only include addresses that appear to be job locations.',
+    '- When salary/pay info exists without a currency, default to "USD".',
+    '- Use null for unknown values; never invent details.',
+    '- Provide confidences between 0 and 1 for every populated field path.',
+  ].join('\n');
+}
+
+function buildPrompt(url: string, html: string): { instructions: string; reference: string } {
   const title = extractTitle(html);
   const metaTags = extractMetaTags(html);
   const visibleText = extractVisibleText(html);
@@ -72,13 +166,27 @@ function buildPrompt(url: string, html: string): { prompt: string; metadata: str
     }
   }
 
-  const prompt = `Extract structured job data from the page at ${url}. Return JSON with keys "job" (matching the JobPosting schema) and "confidences" (map of field paths to 0-1 confidence). Fill in known fields even if some are missing. Use "warnings" when data appears uncertain or incomplete. Only output JSON.`;
-  const metadata = `${metadataLines.join('\n')}
+  const instructions = [
+    `Extract structured job data from the page at ${url}.`,
+    '',
+    '### Output schema',
+    EXTRACTION_SCHEMA,
+    '',
+    '### JSON shape example',
+    JSON_SHAPE_EXAMPLE,
+    '',
+    '### Field guidelines',
+    buildGuidelines(url),
+    '',
+    'Return ONLY a single JSON object that conforms to the schema. Do not include markdown fences or commentary.',
+  ].join('\n');
+
+  const reference = `${metadataLines.join('\n')}
 
 Visible text excerpt (truncated to 15k characters):
 ${visibleText}`.trim();
 
-  return { prompt, metadata };
+  return { instructions, reference };
 }
 
 function fallbackJobFromHtml(url: string, html?: string): Partial<JobPosting> {
@@ -164,47 +272,71 @@ export async function extractFromUrl(url: string): Promise<ExtractResult> {
   } catch (err: any) {
     return buildFailureResult(url, 'failed to download page', { error: err?.message || err });
   }
-  const { prompt, metadata } = buildPrompt(url, html);
-  const messages = [
-    {
-      role: 'system',
-      content:
-        'You extract job postings into structured data. When information is missing, leave the field null rather than guessing.',
-    },
-    { role: 'user', content: `${prompt}\n\n${metadata}` },
+  const { instructions, reference } = buildPrompt(url, html);
+  const baseMessages = [
+    { role: 'system', content: SYSTEM_MESSAGE },
+    { role: 'user', content: `${instructions}\n\n### Reference material\n${reference}` },
   ];
 
   let completion;
-  try {
-    completion = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: OPENROUTER_MODEL,
-        messages,
-        response_format: { type: 'json_object' },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
+  let content: string | undefined;
+  let parsed: Partial<ExtractResult> | undefined;
+  let repaired = false;
+  let parseError: string | undefined;
+
+  for (let attempt = 0; attempt < 3 && !parsed; attempt += 1) {
+    const attemptMessages = [...baseMessages];
+    if (attempt > 0 && parseError) {
+      attemptMessages.push({
+        role: 'user',
+        content: `The previous response could not be parsed as JSON (${parseError}). Return ONLY valid JSON that matches the ExtractionResult schema with double-quoted keys and strings.`,
+      });
+    }
+
+    try {
+      completion = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: OPENROUTER_MODEL,
+          messages: attemptMessages,
+          response_format: { type: 'json_object' },
         },
-      },
-    );
-  } catch (err: any) {
-    return buildFailureResult(url, 'model request failed', { error: err?.message || err, html });
+        {
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+    } catch (err: any) {
+      return buildFailureResult(url, 'model request failed', { error: err?.message || err, html });
+    }
+
+    content = completion.data?.choices?.[0]?.message?.content;
+    if (!content) {
+      parseError = 'empty response';
+      continue;
+    }
+
+    try {
+      parsed = JSON.parse(content);
+      repaired = false;
+    } catch (err: any) {
+      parseError = err instanceof Error ? err.message : String(err);
+      try {
+        const repairedJson = jsonrepair(content);
+        parsed = JSON.parse(repairedJson);
+        repaired = true;
+      } catch (repairErr: any) {
+        parseError = `${parseError}; repair failed: ${repairErr instanceof Error ? repairErr.message : String(repairErr)}`;
+        parsed = undefined;
+      }
+    }
   }
 
-  const content = completion.data?.choices?.[0]?.message?.content;
-  if (!content) {
-    return buildFailureResult(url, 'empty AI response', { raw: completion.data, html });
-  }
-
-  let parsed: Partial<ExtractResult> = {};
-  try {
-    parsed = JSON.parse(content);
-  } catch (err) {
+  if (!parsed) {
     return buildFailureResult(url, 'failed to parse AI response', {
-      error: err instanceof Error ? err.message : String(err),
+      error: parseError || 'unknown parse error',
       raw: content,
       html,
     });
@@ -215,10 +347,15 @@ export async function extractFromUrl(url: string): Promise<ExtractResult> {
     job.sourceUrl = url;
   }
   const confidences = parsed.confidences || {};
+  const warnings = parsed.warnings ? [...parsed.warnings] : [];
+  if (repaired) {
+    warnings.unshift('Model output required JSON repair; please verify extracted data.');
+  }
+
   return {
     job,
     confidences,
-    warnings: parsed.warnings || [],
+    warnings,
     rawModelOutput: parsed,
     failureReason: parsed.failureReason,
     failureDetails: parsed.failureDetails,

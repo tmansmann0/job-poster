@@ -291,6 +291,12 @@ app.post('/publish', async (req, res) => {
   const job = jobFromForm(req.body);
   const ctx = buildContext();
 
+  console.info('[publish] manual publish request received', {
+    targets,
+    jobTitle: job.title,
+    org: job.hiringOrganization?.name,
+  });
+
   const results: Array<PublishResult & { targetId: string; targetLabel: string }> = [];
   for (const id of targets) {
     const pub = getPublisherById(id);
@@ -324,6 +330,14 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     holdIfIncomplete?: boolean;
   } = req.body || {};
 
+  console.info('[api/jobs] request received', {
+    url,
+    modules,
+    holdIfIncomplete,
+    providedFields: Object.keys(fields || {}),
+    providedCredentials: credentials ? Object.keys(credentials) : [],
+  });
+
   try {
     let extracted: Partial<JobPosting> = {};
     let confidences: Record<string, number> = {};
@@ -331,12 +345,17 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     let extractionFailureReason: string | undefined;
     let extractionFailureDetails: any;
     if (url) {
+      console.info('[api/jobs] starting extraction', { url });
       const r = await extractFromUrl(url);
       extracted = r.job || {};
       confidences = r.confidences || {};
       extractionWarnings = r.warnings || [];
       extractionFailureReason = r.failureReason;
       extractionFailureDetails = r.failureDetails;
+      console.info('[api/jobs] extraction completed', {
+        warnings: extractionWarnings,
+        failureReason: extractionFailureReason,
+      });
     }
 
     const mergedPartial = deepMerge(extracted, fields || {});
@@ -377,6 +396,11 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     const shouldHoldForFailure = Boolean(extractionFailureReason);
     const shouldHoldForMissing = hasMissing && holdIfIncomplete;
     if (shouldHoldForFailure || shouldHoldForMissing) {
+      console.warn('[api/jobs] job held for review', {
+        missing,
+        extractionFailureReason,
+        selectedIds,
+      });
       const rec = saveHold({
         sourceUrl: url || job.sourceUrl,
         job,
@@ -402,10 +426,26 @@ app.post('/api/jobs', requireApiKey, async (req, res) => {
     for (const id of selectedIds) {
       const pub = getPublisherById(id);
       if (!pub) continue;
-      results[id] = await pub.publish(job, ctx);
+      console.info('[api/jobs] publishing via module', { moduleId: id, moduleLabel: pub.label });
+      const outcome = await pub.publish(job, ctx);
+      results[id] = outcome;
+      if (!outcome.ok) {
+        console.warn('[api/jobs] module publish failed', { moduleId: id, error: outcome.error });
+      } else {
+        console.info('[api/jobs] module publish succeeded', {
+          moduleId: id,
+          externalId: outcome.id,
+          externalUrl: outcome.url,
+        });
+      }
     }
+    console.info('[api/jobs] publishing complete', {
+      selectedIds,
+      warnings: extractionWarnings,
+    });
     return res.json({ status: 'published', results, warnings: extractionWarnings });
   } catch (err: any) {
+    console.error('[api/jobs] unexpected error', { message: err?.message });
     return res.status(500).json({ status: 'error', error: err?.message || String(err) });
   }
 });
@@ -450,6 +490,7 @@ app.post('/admin/jobs/:id/publish', requireAdmin, async (req, res) => {
   }
   const job = jobFromForm(req.body);
   const ctx = buildContext();
+  console.info('[admin] publishing held job', { jobId: rec.id, modules: rec.selectedModules });
   const results: Record<string, PublishResult> = {};
   for (const id of rec.selectedModules) {
     const pub = getPublisherById(id);
