@@ -150,24 +150,377 @@ async function ensureJobStored(job: JobPosting, slug: string, hostedUrl: string)
     'utf-8',
   );
   const canonical = job.applyUrl || hostedUrl;
-  const applyLink = job.applyUrl
-    ? `<p><a href="${escapeHtml(job.applyUrl)}">Apply on company site</a></p>`
+
+  const organizationName = job.hiringOrganization?.name;
+  const organizationWebsite = job.hiringOrganization?.website;
+  const organizationLogo = job.hiringOrganization?.logoUrl;
+
+  const locationParts = (job.addresses || [])
+    .map((addr) =>
+      [addr.addressLocality, addr.addressRegion, addr.addressCountry]
+        .filter(Boolean)
+        .join(', '),
+    )
+    .filter(Boolean);
+  const primaryLocation = locationParts.length
+    ? `${locationParts[0]}${
+        locationParts.length > 1 ? ` (+${locationParts.length - 1} more)` : ''
+      }`
     : '';
+
+  const remoteTypeLabels: Record<string, string> = {
+    REMOTE: 'Remote',
+    HYBRID: 'Hybrid',
+    ONSITE: 'On-site',
+  };
+  const employmentTypeLabels: Record<string, string> = {
+    FULL_TIME: 'Full-time',
+    PART_TIME: 'Part-time',
+    CONTRACT: 'Contract',
+    TEMPORARY: 'Temporary',
+    INTERN: 'Internship',
+    VOLUNTEER: 'Volunteer',
+    PER_DIEM: 'Per diem',
+    OTHER: 'Other',
+  };
+
+  const formatDate = (value?: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(date);
+  };
+
+  const formatSalary = () => {
+    const salary = job.salary;
+    if (!salary || (salary.min == null && salary.max == null)) return '';
+    const currency = salary.currency || 'USD';
+    const formatter = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+    });
+    const unitLabels: Record<string, string> = {
+      HOUR: 'hour',
+      DAY: 'day',
+      WEEK: 'week',
+      MONTH: 'month',
+      YEAR: 'year',
+    };
+    const unit = unitLabels[salary.unit || 'YEAR'] || 'year';
+    const min = salary.min != null ? formatter.format(salary.min) : null;
+    const max = salary.max != null ? formatter.format(salary.max) : null;
+    const range =
+      min && max && salary.min !== salary.max
+        ? `${min} - ${max}`
+        : formatter.format(Number(salary.min ?? salary.max ?? 0));
+    return `${range} per ${unit}`;
+  };
+
+  const detailRows: { label: string; value: string; href?: string }[] = [];
+
+  if (organizationName) {
+    detailRows.push({
+      label: 'Company',
+      value: escapeHtml(organizationName),
+      href: organizationWebsite ? escapeHtml(organizationWebsite) : undefined,
+    });
+  }
+
+  if (primaryLocation) {
+    detailRows.push({ label: 'Location', value: escapeHtml(primaryLocation) });
+  }
+
+  const remoteLabel = job.remoteType ? remoteTypeLabels[job.remoteType] : '';
+  if (remoteLabel) {
+    detailRows.push({ label: 'Work style', value: escapeHtml(remoteLabel) });
+  }
+
+  const employmentLabel = job.employmentType
+    ? employmentTypeLabels[job.employmentType] || job.employmentType
+    : '';
+  if (employmentLabel) {
+    detailRows.push({ label: 'Employment type', value: escapeHtml(employmentLabel) });
+  }
+
+  const salaryText = formatSalary();
+  if (salaryText) {
+    detailRows.push({ label: 'Compensation', value: escapeHtml(salaryText) });
+  }
+
+  if (job.datePosted) {
+    detailRows.push({ label: 'Posted', value: escapeHtml(formatDate(job.datePosted)) });
+  }
+
+  if (job.validThrough) {
+    detailRows.push({ label: 'Apply by', value: escapeHtml(formatDate(job.validThrough)) });
+  }
+
+  if (job.refId) {
+    detailRows.push({ label: 'Job ID', value: escapeHtml(job.refId) });
+  }
+
+  if (job.applicantLocationRequirements) {
+    detailRows.push({
+      label: 'Location requirements',
+      value: escapeHtml(job.applicantLocationRequirements),
+    });
+  }
+
+  const detailsHtml = detailRows.length
+    ? `<dl class="job-meta">${detailRows
+        .map(
+          (row) =>
+            `<div class="meta-row"><dt>${row.label}</dt><dd>${
+              row.href
+                ? `<a href="${row.href}" target="_blank" rel="noopener">${row.value}</a>`
+                : row.value
+            }</dd></div>`,
+        )
+        .join('')}</dl>`
+    : '';
+
+  const applyCta = job.applyUrl
+    ? `<section class="apply-section">
+        <h2>Ready to apply?</h2>
+        <a class="apply-button" href="${escapeHtml(
+          job.applyUrl,
+        )}" target="_blank" rel="noopener">Apply now</a>
+        <p class="apply-hint">Opens in a new tab${
+          organizationName ? ` on ${escapeHtml(organizationName)}'s site.` : '.'
+        }</p>
+      </section>`
+    : '';
+
+  const logoMarkup = organizationLogo
+    ? `<img class="company-logo" src="${escapeHtml(organizationLogo)}" alt="${
+        organizationName ? escapeHtml(`${organizationName} logo`) : 'Company logo'
+      }" />`
+    : '';
+
   const html = `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(job.title)}</title>
     <link rel="canonical" href="${escapeHtml(canonical)}" />
     <meta name="robots" content="index,follow" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: #1f2933;
+        background: linear-gradient(160deg, #eef2ff 0%, #f8fafc 40%, #ffffff 100%);
+      }
+      a {
+        color: #1d4ed8;
+      }
+      .page {
+        min-height: 100vh;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 48px 16px;
+      }
+      .card {
+        width: min(960px, 100%);
+        background: #ffffff;
+        border-radius: 28px;
+        overflow: hidden;
+        box-shadow: 0 35px 60px rgba(15, 23, 42, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      .job-hero {
+        padding: 48px clamp(24px, 5vw, 56px);
+        background: radial-gradient(circle at top left, rgba(79, 70, 229, 0.16), transparent 60%),
+          linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(79, 70, 229, 0.02));
+        position: relative;
+      }
+      .job-hero::after {
+        content: '';
+        position: absolute;
+        inset: 24px;
+        border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        pointer-events: none;
+      }
+      .job-hero-inner {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 24px;
+        align-items: center;
+      }
+      .job-hero-top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        align-items: center;
+      }
+      .company-logo {
+        width: 72px;
+        height: 72px;
+        border-radius: 20px;
+        object-fit: cover;
+        background: rgba(255, 255, 255, 0.75);
+        padding: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        color: #0f172a;
+      }
+      .subhead {
+        font-size: 1.1rem;
+        color: rgba(15, 23, 42, 0.78);
+        margin: 0;
+      }
+      .job-meta {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        margin: 0;
+      }
+      .meta-row {
+        background: rgba(255, 255, 255, 0.75);
+        border-radius: 16px;
+        padding: 16px 18px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+      dt {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #6366f1;
+        margin-bottom: 6px;
+      }
+      dd {
+        margin: 0;
+        font-size: 0.98rem;
+        color: #0f172a;
+        line-height: 1.5;
+      }
+      .body-section {
+        padding: clamp(28px, 6vw, 56px);
+        display: grid;
+        gap: 32px;
+      }
+      .job-description {
+        font-size: 1.05rem;
+        line-height: 1.75;
+        color: #1f2937;
+      }
+      .job-description h1,
+      .job-description h2,
+      .job-description h3,
+      .job-description h4 {
+        color: #111827;
+        margin-top: 1.6em;
+      }
+      .job-description p {
+        margin: 0 0 1.2em;
+      }
+      .job-description ul,
+      .job-description ol {
+        margin: 0 0 1.2em 1.4em;
+      }
+      .apply-section {
+        background: linear-gradient(140deg, rgba(59, 130, 246, 0.12), rgba(129, 140, 248, 0.08));
+        border-radius: 20px;
+        padding: 28px;
+        display: grid;
+        gap: 12px;
+        text-align: center;
+        border: 1px solid rgba(59, 130, 246, 0.24);
+      }
+      .apply-section h2 {
+        margin: 0;
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: #1d4ed8;
+      }
+      .apply-button {
+        display: inline-block;
+        padding: 14px 32px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #2563eb, #7c3aed);
+        color: #ffffff;
+        font-weight: 600;
+        font-size: 1rem;
+        text-decoration: none;
+        box-shadow: 0 15px 30px rgba(37, 99, 235, 0.25);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .apply-button:hover,
+      .apply-button:focus {
+        transform: translateY(-1px);
+        box-shadow: 0 20px 40px rgba(37, 99, 235, 0.35);
+      }
+      .apply-button:focus {
+        outline: none;
+      }
+      .apply-hint {
+        margin: 0;
+        font-size: 0.85rem;
+        color: rgba(30, 41, 59, 0.7);
+      }
+      @media (max-width: 640px) {
+        .job-hero {
+          padding: 32px 24px;
+        }
+        .meta-row {
+          padding: 14px 16px;
+        }
+        .apply-section {
+          padding: 24px 20px;
+        }
+      }
+    </style>
     <script type="application/ld+json">${JSON.stringify(jobToJsonLd(job))}</script>
   </head>
   <body>
-    <main>
-      <h1>${escapeHtml(job.title)}</h1>
-      <section>${job.descriptionHTML}</section>
-      ${applyLink}
-    </main>
+    <div class="page">
+      <article class="card">
+        <header class="job-hero">
+          <div class="job-hero-inner">
+            <div class="job-hero-top">
+              ${logoMarkup}
+              <div>
+                <h1>${escapeHtml(job.title)}</h1>
+                ${
+                  organizationName
+                    ? `<p class="subhead">${escapeHtml(organizationName)}</p>`
+                    : ''
+                }
+              </div>
+            </div>
+            ${detailsHtml}
+          </div>
+        </header>
+        <div class="body-section">
+          <section class="job-description">${job.descriptionHTML}</section>
+          ${applyCta}
+        </div>
+      </article>
+    </div>
   </body>
 </html>`;
   await fs.promises.writeFile(path.resolve(jobsDir, 'index.html'), html, 'utf-8');
